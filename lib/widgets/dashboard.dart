@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart'; // Importamos la librería
 import '../models/ModelProvider.dart';
 import '../screens/add_maintenance_screen.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
@@ -100,6 +101,51 @@ class _DashboardState extends State<Dashboard> {
       setState(() => records.remove(record));
     } on ApiException catch (e) {
       print('❌ Error al borrar: ${e.message}');
+    }
+  }
+
+  // NUEVO: Función para descargar y mostrar la factura.
+  Future<void> _mostrarFactura(String? receiptKey) async {
+    if (receiptKey == null || receiptKey.isEmpty) return;
+
+    try {
+      // 1. Pedimos a S3 un enlace seguro y temporal (dura 15 minutos).
+      final result = await Amplify.Storage.getUrl(
+        path: StoragePath.fromString(receiptKey),
+      ).result;
+
+      // 2. Mostramos una ventana emergente con la imagen de internet.
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            contentPadding: EdgeInsets.zero,
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                AppBar(
+                  title: const Text(
+                    'Factura',
+                    style: TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                  backgroundColor: Colors.lightBlue,
+                  automaticallyImplyLeading: false,
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.close, color: Colors.white),
+                      onPressed: () => Navigator.pop(context),
+                    ),
+                  ],
+                ),
+                // Cargamos la imagen desde la URL de Amazon
+                Image.network(result.url.toString(), fit: BoxFit.contain),
+              ],
+            ),
+          ),
+        );
+      }
+    } on Exception catch (e) {
+      print('❌ Error al descargar factura: $e');
     }
   }
 
@@ -323,23 +369,50 @@ class _DashboardState extends State<Dashboard> {
                         itemCount: records.length,
                         itemBuilder: (context, index) {
                           final record = records[index];
-                          return Dismissible(
+                          // --- NUEVO: Slidable con botones de Editar y Borrar ---
+                          return Slidable(
                             key: Key(record.id),
-                            direction: DismissDirection.endToStart,
-                            onDismissed: (direction) => _borrarRevision(record),
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              padding: const EdgeInsets.only(right: 20.0),
-                              color: Colors.red,
-                              child: const Icon(
-                                Icons.delete,
-                                color: Colors.white,
-                              ),
+                            // endActionPane configura los botones que salen al deslizar hacia la izquierda
+                            endActionPane: ActionPane(
+                              motion: const ScrollMotion(),
+                              extentRatio:
+                                  0.5, // Ocupará la mitad de la pantalla al abrirse
+                              children: [
+                                SlidableAction(
+                                  onPressed: (context) {
+                                    // TODO: Aquí conectaremos la pantalla de edición.
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        // Llamamos al formulario paro inyectamos el 'record' de esta tarjeta.
+                                        builder: (context) =>
+                                            AddMaintenanceScreen(
+                                              recordToEdit: record,
+                                            ),
+                                      ),
+                                    );
+                                  },
+                                  backgroundColor: Colors.blueAccent,
+                                  foregroundColor: Colors.white,
+                                  icon: Icons.edit,
+                                  label: 'Editar',
+                                ),
+                                SlidableAction(
+                                  onPressed: (context) =>
+                                      _borrarRevision(record),
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                  icon: Icons.delete,
+                                  label: 'Borrar',
+                                ),
+                              ],
                             ),
+                            // El child es exactamente la misma tarjeta que ya tenías
                             child: Card(
                               elevation: 2,
                               margin: const EdgeInsets.symmetric(vertical: 8),
                               child: ListTile(
+                                onTap: () => _mostrarFactura(record.receiptKey),
                                 leading: const CircleAvatar(
                                   backgroundColor: Colors.blueAccent,
                                   child: Icon(Icons.build, color: Colors.white),
@@ -350,7 +423,19 @@ class _DashboardState extends State<Dashboard> {
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
-                                subtitle: Text(_formatearFecha(record.date)),
+                                subtitle: Row(
+                                  children: [
+                                    Text(_formatearFecha(record.date)),
+                                    if (record.receiptKey != null) ...[
+                                      const SizedBox(width: 8),
+                                      const Icon(
+                                        Icons.receipt_long,
+                                        size: 16,
+                                        color: Colors.grey,
+                                      ),
+                                    ],
+                                  ],
+                                ),
                                 trailing: Text(
                                   '${record.cost.toStringAsFixed(2)} €',
                                   style: const TextStyle(

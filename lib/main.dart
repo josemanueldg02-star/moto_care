@@ -22,13 +22,14 @@ Future<void> main() async {
     // 2. Instanciamos el plugin de Autenticación
     final authPlugin = AmplifyAuthCognito();
 
+    final storagePlugin = AmplifyStorageS3();
     // 3. Añadimos AMBOS motores a Amplify
-    await Amplify.addPlugins([apiPlugin, authPlugin]);
+    await Amplify.addPlugins([apiPlugin, authPlugin, storagePlugin]);
 
     String amplifyConfig = await rootBundle.loadString('amplify_outputs.json');
     await Amplify.configure(amplifyConfig);
 
-    print('¡Conexión a AWS y Sistema de Usuarios activados con éxito! 🚀');
+    print('¡Conexión a AWS (API, Auth y Storage) activada con éxito! 🚀');
   } on Exception catch (e) {
     print('Error configurando Amplify: $e');
   }

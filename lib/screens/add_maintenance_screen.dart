@@ -7,7 +7,10 @@ import 'package:image_picker/image_picker.dart';
 import '../models/ModelProvider.dart';
 
 class AddMaintenanceScreen extends StatefulWidget {
-  const AddMaintenanceScreen({super.key});
+  // Declaramos la variable que guardará el registro si estamos editando.
+  final MaintenanceRecord? recordToEdit;
+
+  const AddMaintenanceScreen({super.key, this.recordToEdit});
 
   @override
   State<AddMaintenanceScreen> createState() => _AddMaintenanceScreenState();
@@ -23,6 +26,23 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
 
   // --- NUEVO: Variable para guardar la foto que hagamos ---
   File? _imagenFactura;
+
+  // --- NUEVO: Lógica de inicialización ---
+  @override
+  void initState() {
+    super.initState();
+    // Si la pantalla ha recibido un registro para editar...
+    if (widget.recordToEdit != null) {
+      final rec = widget.recordToEdit!;
+      // Auto-rellenamos los controladores con los datos viejos.
+      _tituloController.text = rec.title;
+      _costeController.text = rec.cost.toString().replaceAll(".", ",");
+      _fechaSeleccionada = rec.date.getDateTime();
+      _notasController.text = rec.notes ?? '';
+      // NOTA UX: No rellenamos _imagenFactura con la remota,
+      // dejamos que el usuario suba una NUEVA local si quiere cambiarla.
+    }
+  }
 
   @override
   void dispose() {
@@ -57,18 +77,18 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
     }
   }
 
-  // --- NUEVO: Función para abrir la cámara nativa del iPhone ---
-  Future<void> _tomarFoto() async {
+  // --- ACTUALIZADO: Función flexible para Cámara o Galería. ---
+  Future<void> _seleccionarImagen(ImageSource source) async {
     final picker = ImagePicker();
-    // Aquí es exactamente donde iOS te lanzará el mensaje de "¿Permites a Moto Care usar la cámara?"
+    // Aquí es donde decidimos si es cámara o galería.
     final XFile? foto = await picker.pickImage(
-      source: ImageSource.camera,
+      source: source,
       imageQuality: 70,
-    ); // Reducimos un poco la calidad para que suba rápido
+    );
 
     if (foto != null) {
       setState(() {
-        _imagenFactura = File(foto.path); // Guardamos la ruta del archivo local
+        _imagenFactura = File(foto.path);
       });
     }
   }
@@ -80,38 +100,55 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
     setState(() => _isSaving = true);
 
     try {
-      String? rutaDiscoDuro; // Aquí guardaremos la "etiqueta" de S3
-
-      // PASO 1: Si el usuario ha hecho una foto, la subimos a Amazon S3
+      // Usamos la misma lógica de subida de foto local (ya la tienes)
+      String? rutaDiscoDuro;
       if (_imagenFactura != null) {
-        // Generamos un nombre único basado en la fecha exacta para no sobreescribir fotos
+        // ... (tu código de subida a S3 de ayer)
         final nombreUnico =
             'facturas/${DateTime.now().millisecondsSinceEpoch}.jpg';
-
-        // Ejecutamos la subida al disco duro
         await Amplify.Storage.uploadFile(
           localFile: AWSFile.fromPath(_imagenFactura!.path),
-          path: StoragePath.fromString(
-            nombreUnico,
-          ), // Usamos StoragePath como exige la nueva versión Gen 2
+          path: StoragePath.fromString(nombreUnico),
         ).result;
-
-        rutaDiscoDuro = nombreUnico; // Guardamos el nombre para el paso 2
+        rutaDiscoDuro = nombreUnico;
         print('📸 Foto subida con éxito a S3: $rutaDiscoDuro');
       }
 
-      // PASO 2: Guardamos el texto y los números en la Base de Datos
-      final nuevaRevision = MaintenanceRecord(
-        title: _tituloController.text,
-        cost: double.parse(_costeController.text.replaceAll(',', '.')),
-        date: TemporalDate(_fechaSeleccionada),
-        notes: _notasController.text.isNotEmpty ? _notasController.text : null,
-        receiptKey:
-            rutaDiscoDuro, // Inyectamos la etiqueta de la foto (o null si no hay)
-      );
+      // --- CAMBIO AQUÍ: Decidimos si Crear o Actualizar ---
 
-      final request = ModelMutations.create(nuevaRevision);
-      await Amplify.API.mutate(request: request).response;
+      if (widget.recordToEdit != null) {
+        // MODO EDITAR: Usamos .copyWith para modificar solo lo que ha cambiado
+        final revisionActualizada = widget.recordToEdit!.copyWith(
+          title: _tituloController.text,
+          cost: double.parse(_costeController.text.replaceAll(',', '.')),
+          date: TemporalDate(_fechaSeleccionada),
+          notes: _notasController.text.isNotEmpty
+              ? _notasController.text
+              : null,
+          // Si subió foto nueva, ponemos la nueva ruta. Si no, mantenemos la vieja.
+          receiptKey: rutaDiscoDuro ?? widget.recordToEdit!.receiptKey,
+        );
+
+        // Llamamos a la mutación .update (crucial)
+        final request = ModelMutations.update(revisionActualizada);
+        await Amplify.API.mutate(request: request).response;
+        print('✅ Registro actualizado con éxito en AWS');
+      } else {
+        // MODO AÑADIR (lo que ya tenías)
+        final nuevaRevision = MaintenanceRecord(
+          title: _tituloController.text,
+          cost: double.parse(_costeController.text.replaceAll(',', '.')),
+          date: TemporalDate(_fechaSeleccionada),
+          notes: _notasController.text.isNotEmpty
+              ? _notasController.text
+              : null,
+          receiptKey: rutaDiscoDuro,
+        );
+
+        final request = ModelMutations.create(nuevaRevision);
+        await Amplify.API.mutate(request: request).response;
+        print('✅ Registro creado con éxito en AWS');
+      }
 
       if (mounted) Navigator.pop(context);
     } on Exception catch (e) {
@@ -125,9 +162,12 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text(
-          'Nueva Revisión',
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+        title: Text(
+          widget.recordToEdit != null ? 'Editar Revisión' : 'Nueva Revisión',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         backgroundColor: Colors.lightBlue, // A juego con tu Dashboard
         iconTheme: const IconThemeData(color: Colors.white),
@@ -198,20 +238,30 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
             ),
             const SizedBox(height: 20),
 
-            // --- NUEVO: Sección visual para la cámara ---
+            // --- ACTUALIZADO: Fila con dos botones para adjuntar factura ---
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _tomarFoto,
-                    icon: const Icon(Icons.camera_alt, color: Colors.white),
-                    label: const Text(
-                      'Escanear Factura',
-                      style: TextStyle(color: Colors.white),
+                  child: OutlinedButton.icon(
+                    onPressed: () => _seleccionarImagen(ImageSource.gallery),
+                    icon: const Icon(
+                      Icons.photo_library,
+                      color: Colors.blueGrey,
                     ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.grey.shade700,
-                      padding: const EdgeInsets.symmetric(vertical: 15),
+                    label: const Text(
+                      'Galería',
+                      style: TextStyle(color: Colors.blueGrey),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => _seleccionarImagen(ImageSource.camera),
+                    icon: const Icon(Icons.camera_alt, color: Colors.blueGrey),
+                    label: const Text(
+                      'Cámara',
+                      style: TextStyle(color: Colors.blueGrey),
                     ),
                   ),
                 ),
@@ -245,8 +295,10 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
                 ),
                 child: _isSaving
                     ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text(
-                        'Guardar Revisión',
+                    : Text(
+                        widget.recordToEdit != null
+                            ? 'Guardar Cambios'
+                            : 'Guardar Revisión',
                         style: TextStyle(fontSize: 18, color: Colors.white),
                       ),
               ),
