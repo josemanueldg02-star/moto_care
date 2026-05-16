@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_api/amplify_api.dart';
+import 'package:moto_care/screens/settings_screen.dart';
 import 'dart:async';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_slidable/flutter_slidable.dart';
@@ -290,15 +291,13 @@ class _DashboardState extends State<Dashboard> {
       height: 180,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).cardColor, // Color dinámico.
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade200),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.grey.shade100,
-            blurRadius: 6,
-            spreadRadius: 2,
-          ),
+        border: Border.all(
+          color: Theme.of(context).dividerColor,
+        ), // Borde dinámico.
+        boxShadow: const [
+          BoxShadow(color: Colors.black12, blurRadius: 6, spreadRadius: 2),
         ],
       ),
       child: Column(
@@ -371,7 +370,6 @@ class _DashboardState extends State<Dashboard> {
     );
 
     return Scaffold(
-      backgroundColor: Colors.white,
       appBar: AppBar(
         title: GestureDetector(
           onTap: _editarNombreMoto,
@@ -392,6 +390,17 @@ class _DashboardState extends State<Dashboard> {
         ),
         backgroundColor: Colors.lightBlue,
         actions: [
+          // --- NUEVO: Botón para ir a Ajustes ---
+          IconButton(
+            icon: const Icon(Icons.settings, color: Colors.white),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+            tooltip: 'Ajustes',
+          ),
           // --- NUEVO: Botón para exportar el CSV ---
           IconButton(
             icon: const Icon(Icons.download, color: Colors.white),
@@ -450,7 +459,9 @@ class _DashboardState extends State<Dashboard> {
                         )
                       : null,
                   filled: true,
-                  fillColor: Colors.grey.shade100,
+                  fillColor: Theme.of(
+                    context,
+                  ).cardColor, // Automáticamente será blanco o negro según modo oscuro o blanco.
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(12),
                     borderSide: BorderSide.none,

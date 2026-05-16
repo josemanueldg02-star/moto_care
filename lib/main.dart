@@ -8,11 +8,15 @@ import 'package:amplify_storage_s3/amplify_storage_s3.dart';
 import 'package:amplify_authenticator/amplify_authenticator.dart';
 import 'dart:convert';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/ModelProvider.dart';
 import 'widgets/dashboard.dart';
 // --- NUEVO: Control manual de la pantalla de carga ---
 import 'package:flutter_native_splash/flutter_native_splash.dart';
+
+// --- NUEVO: Gestor global para el Modo Oscuro ---
+final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.light);
 
 Future<void> main() async {
   // --- NUEVO: Congelamos la pantalla de carga nativa ---
@@ -41,6 +45,11 @@ Future<void> main() async {
     print('Error configurando Amplify: $e');
   }
 
+  // --- NUEVO: Cargar preferencia de tema desde la memoria caché ---
+  final prefs = await SharedPreferences.getInstance();
+  final isDarkMode = prefs.getBool('isDarkMode') ?? false;
+  themeNotifier.value = isDarkMode ? ThemeMode.dark : ThemeMode.light;
+
   runApp(const MotoCareApp());
 }
 
@@ -49,16 +58,45 @@ class MotoCareApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 4. El Authenticator actúa como un guardián. Envuelve toda la aplicación.
-    return Authenticator(
-      child: MaterialApp(
-        // builder: Authenticator.builder() es la magia. Si el usuario no está logueado,
-        // secuestra la pantalla y le muestra el Login. Si está logueado, le deja pasar.
-        builder: Authenticator.builder(),
-        title: 'Moto Care',
-        theme: ThemeData(primarySwatch: Colors.green),
-        home: const Dashboard(),
-      ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: themeNotifier,
+      builder: (_, ThemeMode currentMode, __) {
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          title: 'Moto Care',
+          themeMode: currentMode,
+
+          // --- PARA EL TEMA CLARO ---
+          theme: ThemeData(
+            brightness: Brightness.light,
+            primarySwatch: Colors.blue,
+            scaffoldBackgroundColor: Colors.white,
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Colors.lightBlue,
+              foregroundColor: Colors.white,
+            ),
+          ),
+
+          // --- TEMA OSCURO ---
+          darkTheme: ThemeData(
+            brightness: Brightness.dark,
+            primarySwatch: Colors.blue,
+            scaffoldBackgroundColor: const Color(
+              0xFF121212,
+            ), // Fondo gris muy oscuro
+            appBarTheme: const AppBarTheme(
+              backgroundColor: Color(0xFF1F1F1F),
+              foregroundColor: Colors.white,
+            ),
+            cardColor: const Color(
+              0xFF1E1E1E,
+            ), // Tarjetas ligeramente más claras.
+            dialogBackgroundColor: const Color(0xFF2C2C2C),
+          ),
+
+          home: Authenticator(child: const Dashboard()),
+        );
+      },
     );
   }
 }

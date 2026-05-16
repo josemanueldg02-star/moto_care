@@ -1,13 +1,12 @@
-import 'dart:io'; // Necesario para manejar archivos físicos en el móvil
 import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_api/amplify_api.dart';
-// --- NUEVO: Herramienta para abrir la cámara ---
+import 'package:amplify_storage_s3/amplify_storage_s3.dart';
 import 'package:image_picker/image_picker.dart';
+import 'dart:io';
 import '../models/ModelProvider.dart';
 
 class AddMaintenanceScreen extends StatefulWidget {
-  // Declaramos la variable que guardará el registro si estamos editando.
   final MaintenanceRecord? recordToEdit;
 
   const AddMaintenanceScreen({super.key, this.recordToEdit});
@@ -17,30 +16,27 @@ class AddMaintenanceScreen extends StatefulWidget {
 }
 
 class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
+  final _formKey = GlobalKey<FormState>();
+
   final _tituloController = TextEditingController();
   final _costeController = TextEditingController();
   final _notasController = TextEditingController();
 
-  bool _isSaving = false;
   DateTime _fechaSeleccionada = DateTime.now();
+  XFile? _imagenFactura;
+  bool _isSaving = false;
+  final ImagePicker _picker = ImagePicker();
 
-  // --- NUEVO: Variable para guardar la foto que hagamos ---
-  File? _imagenFactura;
-
-  // --- NUEVO: Lógica de inicialización ---
   @override
   void initState() {
     super.initState();
-    // Si la pantalla ha recibido un registro para editar...
+    // Modo Editar: Auto-rellenamos los campos con los valores existentes
     if (widget.recordToEdit != null) {
       final rec = widget.recordToEdit!;
-      // Auto-rellenamos los controladores con los datos viejos.
       _tituloController.text = rec.title;
-      _costeController.text = rec.cost.toString().replaceAll(".", ",");
+      _costeController.text = rec.cost.toString().replaceAll('.', ',');
       _fechaSeleccionada = rec.date.getDateTime();
       _notasController.text = rec.notes ?? '';
-      // NOTA UX: No rellenamos _imagenFactura con la remota,
-      // dejamos que el usuario suba una NUEVA local si quiere cambiarla.
     }
   }
 
@@ -53,57 +49,44 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
   }
 
   Future<void> _seleccionarFecha(BuildContext context) async {
-    final DateTime? fechaElegida = await showDatePicker(
+    final DateTime? picked = await showDatePicker(
       context: context,
       initialDate: _fechaSeleccionada,
-      firstDate: DateTime(2015),
+      firstDate: DateTime(2020),
       lastDate: DateTime.now(),
-      builder: (context, child) {
-        return Theme(
-          data: Theme.of(context).copyWith(
-            colorScheme: const ColorScheme.light(
-              primary: Colors.green,
-              onPrimary: Colors.white,
-              onSurface: Colors.black,
-            ),
-          ),
-          child: child!,
-        );
-      },
     );
-
-    if (fechaElegida != null && fechaElegida != _fechaSeleccionada) {
-      setState(() => _fechaSeleccionada = fechaElegida);
-    }
-  }
-
-  // --- ACTUALIZADO: Función flexible para Cámara o Galería. ---
-  Future<void> _seleccionarImagen(ImageSource source) async {
-    final picker = ImagePicker();
-    // Aquí es donde decidimos si es cámara o galería.
-    final XFile? foto = await picker.pickImage(
-      source: source,
-      imageQuality: 70,
-    );
-
-    if (foto != null) {
+    if (picked != null && picked != _fechaSeleccionada) {
       setState(() {
-        _imagenFactura = File(foto.path);
+        _fechaSeleccionada = picked;
       });
     }
   }
 
-  // --- ACTUALIZADO: Función de guardado en dos pasos (S3 + Base de datos) ---
+  Future<void> _seleccionarImagen() async {
+    final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+    if (image != null) {
+      setState(() {
+        _imagenFactura = image;
+      });
+    }
+  }
+
+  String _formatearFecha(DateTime date) {
+    final dia = date.day.toString().padLeft(2, '0');
+    final mes = date.month.toString().padLeft(2, '0');
+    return '$dia/$mes/${date.year}';
+  }
+
   Future<void> _guardarEnAWS() async {
-    if (_tituloController.text.isEmpty || _costeController.text.isEmpty) return;
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isSaving = true);
 
     try {
-      // Usamos la misma lógica de subida de foto local (ya la tienes)
       String? rutaDiscoDuro;
+
+      // Si el usuario ha seleccionado una nueva foto local, la subimos a S3
       if (_imagenFactura != null) {
-        // ... (tu código de subida a S3 de ayer)
         final nombreUnico =
             'facturas/${DateTime.now().millisecondsSinceEpoch}.jpg';
         await Amplify.Storage.uploadFile(
@@ -114,196 +97,268 @@ class _AddMaintenanceScreenState extends State<AddMaintenanceScreen> {
         print('📸 Foto subida con éxito a S3: $rutaDiscoDuro');
       }
 
-      // --- CAMBIO AQUÍ: Decidimos si Crear o Actualizar ---
-
       if (widget.recordToEdit != null) {
-        // MODO EDITAR: Usamos .copyWith para modificar solo lo que ha cambiado
+        // MODO EDITAR: Actualizamos el registro existente usando copyWith
         final revisionActualizada = widget.recordToEdit!.copyWith(
-          title: _tituloController.text,
-          cost: double.parse(_costeController.text.replaceAll(',', '.')),
+          title: _tituloController.text.trim(),
+          cost: double.parse(_costeController.text.replaceAll(',', '.').trim()),
           date: TemporalDate(_fechaSeleccionada),
-          notes: _notasController.text.isNotEmpty
-              ? _notasController.text
+          notes: _notasController.text.trim().isNotEmpty
+              ? _notasController.text.trim()
               : null,
-          // Si subió foto nueva, ponemos la nueva ruta. Si no, mantenemos la vieja.
           receiptKey: rutaDiscoDuro ?? widget.recordToEdit!.receiptKey,
         );
 
-        // Llamamos a la mutación .update (crucial)
         final request = ModelMutations.update(revisionActualizada);
         await Amplify.API.mutate(request: request).response;
-        print('✅ Registro actualizado con éxito en AWS');
+        print('Flutter: Registro actualizado con éxito en AWS');
       } else {
-        // MODO AÑADIR (lo que ya tenías)
+        // MODO AÑADIR: Creamos un registro completamente nuevo
         final nuevaRevision = MaintenanceRecord(
-          title: _tituloController.text,
-          cost: double.parse(_costeController.text.replaceAll(',', '.')),
+          title: _tituloController.text.trim(),
+          cost: double.parse(_costeController.text.replaceAll(',', '.').trim()),
           date: TemporalDate(_fechaSeleccionada),
-          notes: _notasController.text.isNotEmpty
-              ? _notasController.text
+          notes: _notasController.text.trim().isNotEmpty
+              ? _notasController.text.trim()
               : null,
           receiptKey: rutaDiscoDuro,
         );
 
         final request = ModelMutations.create(nuevaRevision);
         await Amplify.API.mutate(request: request).response;
-        print('✅ Registro creado con éxito en AWS');
+        print('Flutter: Registro creado con éxito en AWS');
       }
 
       if (mounted) Navigator.pop(context);
-    } on Exception catch (e) {
-      print('❌ Error al guardar: $e');
-      setState(() => _isSaving = false);
+    } on ApiException catch (e) {
+      print('❌ Error de comunicación con AWS: ${e.message}');
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Error al guardar: ${e.message}')));
+    } catch (e) {
+      print('❌ Error inesperado: $e');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Almacenamos si hay una factura previa en la nube para mostrar el aviso visual
+    final tieneFacturaPrevia = widget.recordToEdit?.receiptKey != null;
+
     return Scaffold(
-      backgroundColor: Colors.white,
+      // Eliminado backgroundColor fijo para que use el del tema (claro/oscuro) automáticamente
       appBar: AppBar(
         title: Text(
           widget.recordToEdit != null ? 'Editar Revisión' : 'Nueva Revisión',
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        backgroundColor: Colors.lightBlue, // A juego con tu Dashboard
-        iconTheme: const IconThemeData(color: Colors.white),
       ),
-      // Usamos SingleChildScrollView para que la pantalla se pueda desplazar si el teclado tapa cosas
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          children: [
-            TextField(
-              controller: _tituloController,
-              decoration: const InputDecoration(
-                labelText: 'Título',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            TextField(
-              controller: _costeController,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: const InputDecoration(
-                labelText: 'Coste total (€)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade400),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.calendar_today, color: Colors.lightBlue),
-                  const SizedBox(width: 10),
-                  Text(
-                    'Fecha: ${_fechaSeleccionada.day}/${_fechaSeleccionada.month}/${_fechaSeleccionada.year}',
-                    style: const TextStyle(fontSize: 16),
-                  ),
-                  const Spacer(),
-                  TextButton(
-                    onPressed: () => _seleccionarFecha(context),
-                    child: const Text(
-                      'Cambiar',
-                      style: TextStyle(
-                        color: Colors.lightBlue,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            TextField(
-              controller: _notasController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: 'Notas del taller (opcional)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 20),
-
-            // --- ACTUALIZADO: Fila con dos botones para adjuntar factura ---
-            Row(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _seleccionarImagen(ImageSource.gallery),
-                    icon: const Icon(
-                      Icons.photo_library,
-                      color: Colors.blueGrey,
+                // Campo: Título de la revisión
+                TextFormField(
+                  controller: _tituloController,
+                  autofocus: widget.recordToEdit == null,
+                  decoration: InputDecoration(
+                    labelText: 'Concepto',
+                    hintText: 'Ej. Cambio de Aceite, Neumáticos...',
+                    filled: true,
+                    fillColor: Theme.of(context).cardColor, // Dinámico
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
-                    label: const Text(
-                      'Galería',
-                      style: TextStyle(color: Colors.blueGrey),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor, introduce el concepto';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 20),
+
+                // Campo: Coste Económico
+                TextFormField(
+                  controller: _costeController,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: InputDecoration(
+                    labelText: 'Coste (€)',
+                    hintText: '0,00',
+                    filled: true,
+                    fillColor: Theme.of(context).cardColor, // Dinámico
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Por favor, introduce el coste';
+                    }
+                    final valorLimpio = value.replaceAll(',', '.').trim();
+                    if (double.tryParse(valorLimpio) == null) {
+                      return 'Introduce un número válido';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 20),
+
+                // Selector de Fecha Estilo Tarjeta
+                InkWell(
+                  onTap: () => _seleccionarFecha(context),
+                  borderRadius: BorderRadius.circular(12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 16,
+                      horizontal: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).cardColor, // Dinámico
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade600),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(
+                              Icons.calendar_today,
+                              color: Colors.blueAccent,
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              'Fecha de revisión',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Text(
+                          _formatearFecha(_fechaSeleccionada),
+                          style: const TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _seleccionarImagen(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt, color: Colors.blueGrey),
-                    label: const Text(
-                      'Cámara',
-                      style: TextStyle(color: Colors.blueGrey),
+                const SizedBox(height: 20),
+
+                // Campo: Notas Adicionales
+                TextFormField(
+                  controller: _notasController,
+                  maxLines: 3,
+                  decoration: InputDecoration(
+                    labelText: 'Notas (Opcional)',
+                    hintText: 'Kilómetros de la moto, marca de repuestos...',
+                    filled: true,
+                    fillColor: Theme.of(context).cardColor, // Dinámico
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
                 ),
-                if (_imagenFactura != null) ...[
-                  const SizedBox(width: 15),
-                  // Si hay foto, mostramos una pequeña miniatura cuadrada
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.file(
-                      _imagenFactura!,
-                      width: 50,
-                      height: 50,
-                      fit: BoxFit.cover,
+                const SizedBox(height: 25),
+
+                // Zona de Factura / Adjunto Visual
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: Colors.grey.shade600),
+                  ),
+                  color: Theme.of(context).cardColor, // Dinámico
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      children: [
+                        if (_imagenFactura != null) ...[
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(_imagenFactura!.path),
+                              height: 150,
+                              fit: BoxFit.cover,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ] else if (tieneFacturaPrevia) ...[
+                          const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.cloud_done, color: Colors.green),
+                              SizedBox(width: 8),
+                              Text(
+                                'Factura guardada en la nube',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        ElevatedButton.icon(
+                          onPressed: _seleccionarImagen,
+                          icon: const Icon(Icons.photo_library),
+                          label: Text(
+                            _imagenFactura != null || tieneFacturaPrevia
+                                ? 'Cambiar Factura'
+                                : 'Adjuntar Factura (Imagen)',
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.blueGrey,
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ],
+                ),
+                const SizedBox(height: 35),
+
+                // Botón Principal de Acción de Enviar
+                ElevatedButton(
+                  onPressed: _isSaving ? null : _guardarEnAWS,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: _isSaving
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : Text(
+                          widget.recordToEdit != null
+                              ? 'Guardar Cambios'
+                              : 'Guardar Revisión',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                ),
               ],
             ),
-            const SizedBox(height: 40),
-
-            SizedBox(
-              width: double.infinity,
-              height: 55,
-              child: ElevatedButton(
-                onPressed: _isSaving ? null : _guardarEnAWS,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
-                child: _isSaving
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : Text(
-                        widget.recordToEdit != null
-                            ? 'Guardar Cambios'
-                            : 'Guardar Revisión',
-                        style: TextStyle(fontSize: 18, color: Colors.white),
-                      ),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
