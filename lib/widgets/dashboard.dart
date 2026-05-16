@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:amplify_flutter/amplify_flutter.dart';
 import 'package:amplify_api/amplify_api.dart';
 import 'dart:async';
-import 'package:shared_preferences/shared_preferences.dart'; // Importamos la librería
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_slidable/flutter_slidable.dart';
 import '../models/ModelProvider.dart';
 import '../screens/add_maintenance_screen.dart';
-import 'package:flutter_slidable/flutter_slidable.dart';
+// Librerías para exportar a Excel/CSV
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
@@ -17,14 +21,16 @@ class Dashboard extends StatefulWidget {
 class _DashboardState extends State<Dashboard> {
   List<MaintenanceRecord> records = [];
   StreamSubscription<GraphQLResponse<MaintenanceRecord>>? subscription;
+  StreamSubscription<GraphQLResponse<MaintenanceRecord>>? _updateSubscription;
   bool _isLoading = true;
 
-  String _nombreMoto = 'Cargando...'; // Texto temporal
+  String _nombreMoto = 'Cargando...';
+  String _searchQuery = ''; // Almacena el texto que tecleas
 
   @override
   void initState() {
     super.initState();
-    _cargarNombreMoto(); // Cargamos el nombre al inicio
+    _cargarNombreMoto();
     _sincronizarDatos();
     _iniciarSuscripcion();
   }
@@ -32,19 +38,17 @@ class _DashboardState extends State<Dashboard> {
   @override
   void dispose() {
     subscription?.cancel();
+    _updateSubscription?.cancel();
     super.dispose();
   }
 
-  // --- NUEVO: Función para cargar el nombre guardado ---
   Future<void> _cargarNombreMoto() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
-      // Si no hay nada guardado, usamos 'Mi Moto' por defecto
       _nombreMoto = prefs.getString('nombre_moto') ?? 'Mi Moto';
     });
   }
 
-  // --- NUEVO: Función para guardar el nombre en el dispositivo ---
   Future<void> _guardarNombreMoto(String nombre) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('nombre_moto', nombre);
@@ -78,6 +82,7 @@ class _DashboardState extends State<Dashboard> {
   }
 
   void _iniciarSuscripcion() {
+    // Canal de escucha para Nuevos Registros
     final request = ModelSubscriptions.onCreate(MaintenanceRecord.classType);
     final stream = Amplify.API.subscribe(request);
 
@@ -87,6 +92,25 @@ class _DashboardState extends State<Dashboard> {
         setState(() {
           if (!records.any((r) => r.id == nuevaRevision.id)) {
             records.add(nuevaRevision);
+            _ordenarRevisiones();
+          }
+        });
+      }
+    });
+
+    // Canal de escucha para Registros Editados
+    final updateRequest = ModelSubscriptions.onUpdate(
+      MaintenanceRecord.classType,
+    );
+    final updateStream = Amplify.API.subscribe(updateRequest);
+
+    _updateSubscription = updateStream.listen((event) {
+      final registroEditado = event.data;
+      if (registroEditado != null) {
+        setState(() {
+          final index = records.indexWhere((r) => r.id == registroEditado.id);
+          if (index != -1) {
+            records[index] = registroEditado;
             _ordenarRevisiones();
           }
         });
@@ -104,17 +128,21 @@ class _DashboardState extends State<Dashboard> {
     }
   }
 
-  // NUEVO: Función para descargar y mostrar la factura.
+  String _formatearFecha(TemporalDate temporalDate) {
+    final date = temporalDate.getDateTime();
+    final dia = date.day.toString().padLeft(2, '0');
+    final mes = date.month.toString().padLeft(2, '0');
+    return '$dia/$mes/${date.year}';
+  }
+
   Future<void> _mostrarFactura(String? receiptKey) async {
     if (receiptKey == null || receiptKey.isEmpty) return;
 
     try {
-      // 1. Pedimos a S3 un enlace seguro y temporal (dura 15 minutos).
       final result = await Amplify.Storage.getUrl(
         path: StoragePath.fromString(receiptKey),
       ).result;
 
-      // 2. Mostramos una ventana emergente con la imagen de internet.
       if (mounted) {
         showDialog(
           context: context,
@@ -137,7 +165,6 @@ class _DashboardState extends State<Dashboard> {
                     ),
                   ],
                 ),
-                // Cargamos la imagen desde la URL de Amazon
                 Image.network(result.url.toString(), fit: BoxFit.contain),
               ],
             ),
@@ -149,11 +176,49 @@ class _DashboardState extends State<Dashboard> {
     }
   }
 
-  String _formatearFecha(TemporalDate temporalDate) {
-    final date = temporalDate.getDateTime();
-    final dia = date.day.toString().padLeft(2, '0');
-    final mes = date.month.toString().padLeft(2, '0');
-    return '$dia/$mes/${date.year}';
+  // --- ACTUALIZACIÓN: Función para generar y compartir el Excel (CSV) ---
+  Future<void> _exportarDatosCSV() async {
+    if (records.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay datos para exportar')),
+      );
+      return;
+    }
+
+    try {
+      // 1. Preparamos las cabeceras de las columnas
+      String csvData = "Fecha,Título,Coste (€),Notas\n";
+
+      // 2. Recorremos los registros y rellenamos las filas
+      for (var record in records) {
+        // Limpiamos comas y saltos de línea de las notas para que no rompan el Excel
+        final notasLimpias = (record.notes ?? '')
+            .replaceAll('\n', ' ')
+            .replaceAll(',', ';');
+        final fecha = _formatearFecha(record.date);
+
+        csvData += "$fecha,${record.title},${record.cost},$notasLimpias\n";
+      }
+
+      // 3. Creamos un archivo temporal en la memoria caché del móvil
+      final directorio = await getTemporaryDirectory();
+      final rutaArchivo = '${directorio.path}/historial_moto.csv';
+      final archivo = File(rutaArchivo);
+      await archivo.writeAsString(csvData);
+
+      // 4. Abrimos el menú nativo de iOS/Android para compartir el archivo
+      if (mounted) {
+        final box = context.findRenderObject() as RenderBox?;
+        await Share.shareXFiles(
+          [XFile(rutaArchivo)],
+          text: 'Aquí tienes el historial de mantenimiento de mi moto.',
+          sharePositionOrigin:
+              box!.localToGlobal(Offset.zero) & box.size, // Necesario para iPad
+        );
+      }
+    } catch (e) {
+      print('❌ Error al exportar: $e');
+    }
   }
 
   Future<void> _editarNombreMoto() async {
@@ -192,7 +257,6 @@ class _DashboardState extends State<Dashboard> {
       setState(() {
         _nombreMoto = nuevoNombre.trim();
       });
-      // Guardamos el nuevo nombre en la memoria del dispositivo
       await _guardarNombreMoto(_nombreMoto);
     }
   }
@@ -295,6 +359,12 @@ class _DashboardState extends State<Dashboard> {
 
   @override
   Widget build(BuildContext context) {
+    // 1. Calculamos la lista filtrada en tiempo real para el ListView
+    final filteredRecords = records.where((record) {
+      return record.title.toLowerCase().contains(_searchQuery.toLowerCase());
+    }).toList();
+
+    // 2. El gasto total acumulado se sigue calculando con la lista completa original
     final gastoTotal = records.fold<double>(
       0,
       (sum, record) => sum + record.cost,
@@ -322,6 +392,12 @@ class _DashboardState extends State<Dashboard> {
         ),
         backgroundColor: Colors.lightBlue,
         actions: [
+          // --- NUEVO: Botón para exportar el CSV ---
+          IconButton(
+            icon: const Icon(Icons.download, color: Colors.white),
+            onPressed: _exportarDatosCSV,
+            tooltip: 'Exportar a Excel',
+          ),
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.white),
             onPressed: () async => await Amplify.Auth.signOut(),
@@ -353,6 +429,38 @@ class _DashboardState extends State<Dashboard> {
               _construirGraficoAnual(),
 
               const SizedBox(height: 20),
+
+              // --- Barra de Búsqueda ---
+              TextField(
+                onChanged: (value) {
+                  setState(() {
+                    _searchQuery = value;
+                  });
+                },
+                decoration: InputDecoration(
+                  hintText: 'Buscar revisión (ej. aceite)...',
+                  prefixIcon: const Icon(Icons.search, color: Colors.grey),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Colors.grey),
+                          onPressed: () {
+                            setState(() => _searchQuery = '');
+                            FocusScope.of(context).unfocus();
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: Colors.grey.shade100,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 0),
+                ),
+              ),
+              const SizedBox(height: 15),
+
+              // --- Lista de Revisiones de Mantenimiento ---
               Expanded(
                 child: _isLoading
                     ? const Center(
@@ -365,26 +473,28 @@ class _DashboardState extends State<Dashboard> {
                           style: TextStyle(color: Colors.grey),
                         ),
                       )
+                    : filteredRecords.isEmpty
+                    ? Center(
+                        child: Text(
+                          'No hay resultados para "$_searchQuery"',
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                      )
                     : ListView.builder(
-                        itemCount: records.length,
+                        itemCount: filteredRecords.length,
                         itemBuilder: (context, index) {
-                          final record = records[index];
-                          // --- NUEVO: Slidable con botones de Editar y Borrar ---
+                          final record = filteredRecords[index];
                           return Slidable(
                             key: Key(record.id),
-                            // endActionPane configura los botones que salen al deslizar hacia la izquierda
                             endActionPane: ActionPane(
                               motion: const ScrollMotion(),
-                              extentRatio:
-                                  0.5, // Ocupará la mitad de la pantalla al abrirse
+                              extentRatio: 0.5,
                               children: [
                                 SlidableAction(
                                   onPressed: (context) {
-                                    // TODO: Aquí conectaremos la pantalla de edición.
                                     Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                        // Llamamos al formulario paro inyectamos el 'record' de esta tarjeta.
                                         builder: (context) =>
                                             AddMaintenanceScreen(
                                               recordToEdit: record,
@@ -407,7 +517,6 @@ class _DashboardState extends State<Dashboard> {
                                 ),
                               ],
                             ),
-                            // El child es exactamente la misma tarjeta que ya tenías
                             child: Card(
                               elevation: 2,
                               margin: const EdgeInsets.symmetric(vertical: 8),

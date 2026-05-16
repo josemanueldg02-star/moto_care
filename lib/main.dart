@@ -11,9 +11,13 @@ import 'package:flutter/services.dart';
 
 import 'models/ModelProvider.dart';
 import 'widgets/dashboard.dart';
+// --- NUEVO: Control manual de la pantalla de carga ---
+import 'package:flutter_native_splash/flutter_native_splash.dart';
 
 Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+  // --- NUEVO: Congelamos la pantalla de carga nativa ---
+  WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
+  FlutterNativeSplash.preserve(widgetsBinding: widgetsBinding);
 
   try {
     final apiPlugin = AmplifyAPI(
@@ -28,7 +32,10 @@ Future<void> main() async {
 
     String amplifyConfig = await rootBundle.loadString('amplify_outputs.json');
     await Amplify.configure(amplifyConfig);
+    print('¡Conexión a AWS activada con éxito! 🚀');
 
+    // Retiramos la pantalla de carga porque el backend ya está listo.
+    FlutterNativeSplash.remove();
     print('¡Conexión a AWS (API, Auth y Storage) activada con éxito! 🚀');
   } on Exception catch (e) {
     print('Error configurando Amplify: $e');
