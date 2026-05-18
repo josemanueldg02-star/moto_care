@@ -1,17 +1,26 @@
-# moto_care
+# 🏍️ Moto Care - App de Gestión de Mantenimiento
 
-A new Flutter project.
+Una aplicación móvil Full-Stack desarrollada en **Flutter** diseñada para la gestión integral y el control de gastos del mantenimiento de motocicletas. Este proyecto destaca por su integración robusta con servicios en la nube (AWS) y un diseño centrado en la experiencia de usuario (UX).
 
-## Getting Started
+## 🛠️ Stack Tecnológico
 
-This project is a starting point for a Flutter application.
+* **Frontend Mobile:** Flutter, Dart
+* **Autenticación:** Amazon Cognito
+* **Base de Datos y Nube:** AWS Amplify, GraphQL (Sincronización en tiempo real)
+* **Almacenamiento de Archivos:** Amazon S3 (Gestión de recibos y facturas)
+* **Control de Versiones:** Git / GitHub
 
-A few resources to get you started if this is your first Flutter project:
+## ✨ Características Principales
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+* **Autenticación Segura:** Sistema de login y registro gestionado integralmente mediante AWS Cognito.
+* **Gestión Documental Cloud:** Subida, lectura y almacenamiento de recibos de piezas y talleres directamente en *buckets* de Amazon S3.
+* **Dashboard Financiero:** Implementación de gráficos dinámicos que muestran el gasto anual en mantenimiento.
+* **Búsqueda Avanzada:** Motor de búsqueda en tiempo real para localizar rápidamente mantenimientos pasados.
+* **UI/UX y Personalización:** Arquitectura de interfaz reactiva con persistencia de datos local y soporte completo para **Modo Oscuro (Dark Mode)**.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 🏗️ Arquitectura
+El proyecto aplica principios de diseño modular, combinando el árbol de widgets de Flutter con la potencia del ecosistema *Serverless* de Amazon Web Services. El uso de GraphQL permite operaciones eficientes de consulta y mutación de datos desde el dispositivo móvil.
+
+---
+**Autor:** Jose Manuel Dominguez Garcia
+**Repositorio:** [https://github.com/josemanueldg02-star/moto_care](https://github.com/josemanueldg02-star/moto_care)
